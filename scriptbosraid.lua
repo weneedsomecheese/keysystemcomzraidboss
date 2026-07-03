@@ -795,8 +795,6 @@ local function startAutoShoot()
 
     _G._autoShootActive = true
     local lastShot = 0
-    local callsThisSecond = 0
-    local secondStart = tick()
     local shootStartTime = tick()
     local isAtomizer = CONFIG.Boss == "Atomizer"
 
@@ -806,17 +804,10 @@ local function startAutoShoot()
         if tick() - lastShot < CONFIG.ShootRate then return end
         lastShot = tick()
 
-        -- Throttle: reset counter each second
-        if tick() - secondStart >= 1 then
-            callsThisSecond = 0
-            secondStart = tick()
-        end
-
         local char = LocalPlayer.Character
         if not char then return end
         local tool = char:FindFirstChildOfClass("Tool")
         if not tool then
-            -- Auto-equip from backpack
             local bp = LocalPlayer:FindFirstChild("Backpack")
             if bp then
                 local bpTool = bp:FindFirstChildOfClass("Tool")
@@ -834,7 +825,9 @@ local function startAutoShoot()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
 
-        local bulletsToFire = math.min(CONFIG.BulletsPerTick, MAX_CALLS_PER_SEC - callsThisSecond)
+        -- Spread shots evenly: cap per frame instead of bursting per second
+        local maxPerFrame = math.max(1, math.floor(MAX_CALLS_PER_SEC / 60))
+        local bulletsToFire = math.min(CONFIG.BulletsPerTick, maxPerFrame)
         if bulletsToFire <= 0 then return end
 
         -- Focus fire: all bullets on first alive target, then next
@@ -868,7 +861,6 @@ local function startAutoShoot()
                 BulletId = "Bullet_" .. HttpService:GenerateGUID(false)
             })
             inflict:FireServer("Gun", tool, head, packet)
-            callsThisSecond = callsThisSecond + 1
         end
     end)
 end
