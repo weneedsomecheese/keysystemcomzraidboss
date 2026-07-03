@@ -1,48 +1,8 @@
---[[
-    ================================================================
-    [ SCRIPT INFORMATION ]
-    Project: Custom Script
-    Author: OYB
-    YouTube: https://www.youtube.com/channel/UCAlXXV1Hbvf7WbfXARuVtiQ
-    
-    [ TERMS AND CONDITIONS ]
-    - You ARE allowed to use and modify this script for your own games.
-    - You ARE NOT allowed to re-upload, redistribute, or claim 
-      ownership of this script.
-    - Removing or altering these credits is strictly prohibited.
-    
-    Copyright (c) 2026 OYB. All rights reserved.
-    ================================================================
-]]
+-- SaveToWorkspace.lua
+-- Paste this into your executor to save + run the Boss Raid AutoFarm script
+-- It will persist across teleports via queue_on_teleport
 
--- ⚠️ IMPORTANT: Put this code at the VERY TOP of your Main Script (before obfuscating) ⚠️
-
-local ProtectionConfig = {
-    -- 🔴 CRITICAL: This MUST exactly match the 'Secret' value in your Key System's Config!
-    -- If your Key System has: Secret = "Test"
-    -- Then this must also be: SecretKey = "Test"
-    SecretKey = "Ali_Hussain10",
-    
-    -- The name of your Hub (shown in the kick message if they try to bypass)
-    HubName = "Stonk Hub"
-}
-
--- Anti-Bypass Logic: Checks if the Key System successfully set the global variable
-if not _G[ProtectionConfig.SecretKey] then
-    local player = game:GetService("Players").LocalPlayer
-    if player then
-        player:Kick("\n🛡️ Unauthorized Execution 🛡️\n\nPlease use the official Key System to run " .. ProtectionConfig.HubName)
-    end
-    return -- Stops the rest of the script from loading!
-end
-
--------------------------------------------------------------------------------
--- 👇 YOUR MAIN SCRIPT CODE STARTS HERE 👇
--------------------------------------------------------------------------------
-
-print(ProtectionConfig.HubName .. " Loaded Successfully!")
-
-
+local SCRIPT_CONTENT = [==[
 -- Prevent multiple loads (allow re-execution after 5 seconds)
 if _G._BossRaidLoadTime and (tick() - _G._BossRaidLoadTime) < 5 then return end
 _G._BossRaidLoadTime = tick()
@@ -91,15 +51,13 @@ local function loadSettings()
     return nil
 end
 
--- Queue script to re-run after teleport (loads from GitHub, never saves raw script locally)
+-- Queue script to re-run after teleport (file must be pre-saved to workspace)
 pcall(function()
     if queue_on_teleport then
         queue_on_teleport([[
             _G._AUTOFARM_QUEUED = true
-            task.wait(3)
             pcall(function()
-                _G["Ali_Hussain10"] = true
-                loadstring(game:HttpGet("https://raw.githubusercontent.com/weneedsomecheese/keysystemcomzraidboss/refs/heads/main/scriptbosraid.lua"))()
+                loadstring(readfile("BossRaidAutoFarm.lua"))()
             end)
         ]])
     end
@@ -210,17 +168,13 @@ end
 
 if not _G._crystalZeroTimes then _G._crystalZeroTimes = {} end
 
-local _cachedTargets = {}
-local _cacheTime = 0
-local CACHE_INTERVAL = 0.3
-
-local function _refreshTargets()
+local function findAllZombies()
     local crystals = {}
-    local bList = {}
+    local bosses = {}
     local zombies = {}
     local seen = {}
     local mapFolder = findMapFolder()
-    if not mapFolder then _cachedTargets = {} return end
+    if not mapFolder then return {} end
 
     local zombieFolder = mapFolder:FindFirstChild("ZombiesSpawnedIn")
 
@@ -238,14 +192,16 @@ local function _refreshTargets()
                 elseif isBoss then
                     if desc.Health > 0 then
                         seen[model] = true
-                        table.insert(bList, model)
+                        table.insert(bosses, model)
                     end
                 else
+                    -- Crystal/gate/destructible
                     if desc.Health > 0 then
                         seen[model] = true
                         table.insert(crystals, model)
                         _G._crystalZeroTimes[model] = nil
                     elseif desc.Health == 0 then
+                        -- Keep shooting for 0.5s after hitting 0 HP
                         if not _G._crystalZeroTimes[model] then
                             _G._crystalZeroTimes[model] = tick()
                         end
@@ -259,20 +215,12 @@ local function _refreshTargets()
         end
     end
 
+    -- Priority: crystals first, then boss, then regular zombies
     local result = {}
     for _, c in ipairs(crystals) do table.insert(result, c) end
-    for _, b in ipairs(bList) do table.insert(result, b) end
+    for _, b in ipairs(bosses) do table.insert(result, b) end
     for _, z in ipairs(zombies) do table.insert(result, z) end
-    _cachedTargets = result
-end
-
-local function findAllZombies()
-    local now = tick()
-    if now - _cacheTime >= CACHE_INTERVAL then
-        _cacheTime = now
-        _refreshTargets()
-    end
-    return _cachedTargets
+    return result
 end
 
 -- ============================================================
@@ -721,8 +669,8 @@ local function startFly()
         local hrp2 = char2:FindFirstChild("HumanoidRootPart")
         if not hrp2 then return end
 
-        -- Noclip: disable collision on character parts
-        for _, part in ipairs(char2:GetChildren()) do
+        -- Noclip: disable collision on all character parts
+        for _, part in ipairs(char2:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
             end
@@ -795,19 +743,25 @@ local function startAutoShoot()
 
     _G._autoShootActive = true
     local lastShot = 0
-    local shootStartTime = tick()
-    local isAtomizer = CONFIG.Boss == "Atomizer"
+    local callsThisSecond = 0
+    local secondStart = tick()
 
     _G._autoShootConn = RunService.Heartbeat:Connect(function()
         if not CONFIG.AutoShoot then return end
-        if isAtomizer and tick() - shootStartTime < 4 then return end
         if tick() - lastShot < CONFIG.ShootRate then return end
         lastShot = tick()
+
+        -- Throttle: reset counter each second
+        if tick() - secondStart >= 1 then
+            callsThisSecond = 0
+            secondStart = tick()
+        end
 
         local char = LocalPlayer.Character
         if not char then return end
         local tool = char:FindFirstChildOfClass("Tool")
         if not tool then
+            -- Auto-equip from backpack
             local bp = LocalPlayer:FindFirstChild("Backpack")
             if bp then
                 local bpTool = bp:FindFirstChildOfClass("Tool")
@@ -825,24 +779,13 @@ local function startAutoShoot()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
 
-        -- Spread shots evenly: cap per frame instead of bursting per second
-        local maxPerFrame = math.max(1, math.floor(MAX_CALLS_PER_SEC / 60))
-        local bulletsToFire = math.min(CONFIG.BulletsPerTick, maxPerFrame)
+        local bulletsToFire = math.min(CONFIG.BulletsPerTick, MAX_CALLS_PER_SEC - callsThisSecond)
         if bulletsToFire <= 0 then return end
 
-        -- Focus fire: all bullets on first alive target, then next
-        local tIdx = 1
         for i = 1, bulletsToFire do
-            local target = targets[tIdx]
-            if not target then break end
+            local target = targets[((i - 1) % #targets) + 1]
             local hum = target:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health < 0 then
-                tIdx = tIdx + 1
-                target = targets[tIdx]
-                if not target then break end
-                hum = target:FindFirstChildOfClass("Humanoid")
-                if not hum or hum.Health < 0 then break end
-            end
+            if not hum or hum.Health < 0 then continue end
 
             local head = target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
             if not head then
@@ -850,7 +793,7 @@ local function startAutoShoot()
                     if p:IsA("BasePart") then head = p break end
                 end
             end
-            if not head then tIdx = tIdx + 1 continue end
+            if not head then continue end
 
             local dist = (hrp.Position - head.Position).Magnitude
             local packet = encodePacket({
@@ -861,6 +804,7 @@ local function startAutoShoot()
                 BulletId = "Bullet_" .. HttpService:GenerateGUID(false)
             })
             inflict:FireServer("Gun", tool, head, packet)
+            callsThisSecond = callsThisSecond + 1
         end
     end)
 end
@@ -1377,3 +1321,19 @@ else
     end
 end
 print("[BossRaidGUI] Loaded" .. (WAS_QUEUED and " (auto-resumed after teleport)" or ""))
+]==]
+
+-- Save to executor workspace
+writefile("BossRaidAutoFarm.lua", SCRIPT_CONTENT)
+print("[SaveToWorkspace] Script saved! (" .. #SCRIPT_CONTENT .. " bytes)")
+
+-- Queue for teleport persistence
+pcall(function()
+    if queue_on_teleport then
+        queue_on_teleport('_G._AUTOFARM_QUEUED = true; task.wait(3); pcall(function() loadstring(readfile("BossRaidAutoFarm.lua"))() end)')
+        print("[SaveToWorkspace] queue_on_teleport set!")
+    end
+end)
+
+-- Run it now
+loadstring(SCRIPT_CONTENT)()
